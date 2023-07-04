@@ -293,17 +293,15 @@ func StartGateway(ctx *cli.Context, gw Gateway) {
 	globalServerConfig = srvCfg
 	globalServerConfigMu.Unlock()
 
-	go globalIAMSys.Init(GlobalContext, newObject, globalEtcdClient, globalRefreshIAMInterval)
+	go globalIAMSys.InitByRedis(GlobalContext, newObject, globalRedisClient, globalRefreshIAMInterval)
 
-	if gatewayName == NASBackendGateway {
-		buckets, err := newObject.ListBuckets(GlobalContext, BucketOptions{})
-		if err != nil {
-			logger.Fatal(err, "Unable to list buckets")
-		}
-		logger.FatalIf(globalBucketMetadataSys.Init(GlobalContext, buckets, newObject), "Unable to initialize bucket metadata")
-
-		logger.FatalIf(globalEventNotifier.InitBucketTargets(GlobalContext, newObject), "Unable to initialize bucket targets for notification system")
+	buckets, err := newObject.ListBuckets(GlobalContext, BucketOptions{})
+	if err != nil {
+		logger.Fatal(err, "Unable to list buckets")
 	}
+	logger.FatalIf(globalBucketMetadataSys.Init(GlobalContext, buckets, newObject), "Unable to initialize bucket metadata")
+
+	logger.FatalIf(globalEventNotifier.InitBucketTargets(GlobalContext, newObject), "Unable to initialize bucket targets for notification system")
 
 	if globalCacheConfig.Enabled {
 		// initialize the new disk cache objects.

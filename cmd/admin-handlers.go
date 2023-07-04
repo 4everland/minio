@@ -2815,6 +2815,58 @@ func (a adminAPIHandlers) InspectDataHandler(w http.ResponseWriter, r *http.Requ
 	appendClusterMetaInfoToZip(ctx, zipWriter)
 }
 
+func (a adminAPIHandlers) PutObjectMetadata(w http.ResponseWriter, r *http.Request) {
+	ctx := newContext(r, w, "PutObjectMetadata")
+
+	//defer logger.AuditLog(ctx, w, r, mustGetClaimsFromToken(r))
+
+	objectAPI, _ := validateAdminReq(ctx, w, r, iampolicy.AllAdminActions)
+	if objectAPI == nil {
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, r.ContentLength))
+
+	var mreq madmin.PutObjectMetadataReq
+	if err := json.Unmarshal(bodyBytes, &mreq); err != nil {
+		logger.LogIf(ctx, err)
+		writeErrorResponseJSON(ctx, w, errorCodes.ToAPIErr(ErrMalformedJSON), r.URL)
+		return
+	}
+	bucket := mreq.Bucket
+	object := mreq.Key
+	etag := mreq.Etag
+
+	popts := ObjectOptions{
+		EvalMetadataFn: func(oi ObjectInfo) error {
+			if oi.ETag != "" && etag != "" && (etag != oi.ETag && strings.Trim(etag, "\"") != oi.ETag) {
+				return ObjectNotFound{Bucket: bucket, Object: object}
+			}
+			if mreq.Metadata["X-Amz-Meta-IPFS-Hash"] != "" && oi.ETag != "" && mreq.Metadata["X-Amz-Meta-IPFS-Hash"] != oi.ETag {
+				return ObjectNotFound{Bucket: bucket, Object: object}
+			}
+			for key, value := range mreq.Metadata {
+				key = strings.ToLower(key)
+				if value == "" {
+					if oi.UserDefined[key] != "" {
+						delete(oi.UserDefined, key)
+					}
+				} else {
+					oi.UserDefined[key] = value
+				}
+
+			}
+			return nil
+		},
+	}
+	_, err = objectAPI.PutObjectMetadata(ctx, bucket, object, popts)
+	if err != nil {
+		writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
+		return
+	}
+	writeSuccessResponseHeadersOnly(w)
+}
+
 func createHostAnonymizerForFSMode() map[string]string {
 	hostAnonymizer := map[string]string{
 		globalLocalNodeName: "server1",

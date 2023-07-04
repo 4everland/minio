@@ -82,6 +82,10 @@ type BucketInfo struct {
 
 	// Bucket features enabled
 	Versioning, ObjectLocking bool
+
+	Creator string
+
+	StorageSize uint64
 }
 
 // ObjectInfo - represents object metadata.

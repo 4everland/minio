@@ -18,7 +18,10 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/minio/pkg/bucket/policy/condition"
+	iampolicy "github.com/minio/pkg/iam/policy"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -261,4 +264,38 @@ func BucketAccessPolicyToPolicy(policyInfo *miniogopolicy.BucketAccessPolicy) (*
 	}
 
 	return &bucketPolicy, nil
+}
+
+func addBucketToUserPolicy(r *http.Request, bucketName string) {
+	cred := getReqAccessCred(r, globalSite.Region)
+	principalID := cred.AccessKey
+	if cred.ParentUser != "" {
+		principalID = cred.ParentUser
+	}
+
+	policyName := "policy-" + principalID
+	pdata, err := globalIAMSys.InfoPolicy(policyName)
+	if err != nil {
+		return
+	}
+	var p iampolicy.Policy
+	err = p.UnmarshalJSON(pdata.Policy)
+	if err != nil || p.IsEmpty() {
+		return
+	}
+
+	for key, statement := range p.Statements {
+		if statement.Effect == policy.Allow && statement.Actions.Match(iampolicy.AllActions) {
+			p.Statements[key].Resources.Add(iampolicy.NewResource(bucketName, "*"))
+			globalIAMSys.SetPolicy(context.Background(), policyName, p)
+			return
+		}
+	}
+
+	statement := iampolicy.NewStatement(
+		UserBucketInfoPolicySID, policy.Allow, iampolicy.NewActionSet(iampolicy.AllActions),
+		iampolicy.NewResourceSet(iampolicy.NewResource(bucketName, "*")), condition.NewFunctions(),
+	)
+	p.Statements = append(p.Statements, statement)
+	globalIAMSys.SetPolicy(context.Background(), policyName, p)
 }

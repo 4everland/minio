@@ -20,6 +20,8 @@ package cmd
 import (
 	"crypto/x509"
 	"errors"
+	"github.com/minio/pkg/bucket/policy"
+	"github.com/redis/go-redis/v9"
 	"net/http"
 	"os"
 	"sync"
@@ -380,6 +382,10 @@ var (
 	// MinIO client
 	globalMinioClient *minio.Client
 
+	// Replace ETCD
+	globalRedisClient *redis.Client
+
+	UserBucketInfoPolicySID = policy.ID("UserBucketInfo")
 	// Add new variable global values here.
 )
 

@@ -170,3 +170,35 @@ func (list *TargetList) Send(event Event, targetIDset TargetIDSet, resCh chan<- 
 func NewTargetList() *TargetList {
 	return &TargetList{targets: make(map[TargetID]Target)}
 }
+
+func (list *TargetList) SendAll(event Event, resCh chan<- TargetIDResult) {
+	if atomic.LoadInt64(&list.currentSendCalls) > maxConcurrentTargetSendCalls {
+		err := fmt.Errorf("concurrent target notifications exceeded %d", maxConcurrentTargetSendCalls)
+		list.RLock()
+		defer list.RUnlock()
+		for id := range list.targets {
+			resCh <- TargetIDResult{ID: id, Err: err}
+		}
+		return
+	}
+
+	go func() {
+		var wg sync.WaitGroup
+		list.RLock()
+		defer list.RUnlock()
+		for id, target := range list.targets {
+			wg.Add(1)
+			go func(id TargetID, target Target) {
+				atomic.AddInt64(&list.currentSendCalls, 1)
+				defer atomic.AddInt64(&list.currentSendCalls, -1)
+				defer wg.Done()
+				tgtRes := TargetIDResult{ID: id}
+				if err := target.Save(event); err != nil {
+					tgtRes.Err = err
+				}
+				resCh <- tgtRes
+			}(id, target)
+		}
+		wg.Wait()
+	}()
+}

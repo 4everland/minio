@@ -32,6 +32,8 @@ type DeletedObject struct {
 	DeleteMarkerMTime DeleteMarkerMTime `xml:"-"`
 	// MinIO extensions to support delete marker replication
 	ReplicationState ReplicationState `xml:"-"`
+
+	Size int64 `xml:"Size,omitempty"`
 }
 
 // DeleteMarkerMTime is an embedded type containing time.Time for XML marshal

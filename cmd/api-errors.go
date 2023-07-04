@@ -841,7 +841,7 @@ var errorCodes = errorCodeMap{
 	},
 	ErrBucketAlreadyOwnedByYou: {
 		Code:           "BucketAlreadyOwnedByYou",
-		Description:    "Your previous request to create the named bucket succeeded and you already own it.",
+		Description:    "The Bucket you created already exists, please edit its name to recreate it",
 		HTTPStatusCode: http.StatusConflict,
 	},
 	ErrInvalidDuration: {

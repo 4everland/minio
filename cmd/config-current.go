@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/minio/minio/internal/config/redis"
 	"strings"
 	"sync"
 
@@ -72,6 +73,7 @@ func initHelp() {
 		config.ScannerSubSys:        scanner.DefaultKVS,
 		config.SubnetSubSys:         subnet.DefaultKVS,
 		config.CallhomeSubSys:       callhome.DefaultKVS,
+		config.RedisSubSys:          redis.DefaultKVS,
 	}
 	for k, v := range notify.DefaultNotificationKVS {
 		kvs[k] = v
@@ -206,6 +208,11 @@ func initHelp() {
 			Description: "enable callhome for the cluster",
 			Optional:    true,
 		},
+		config.HelpKV{
+			Key:         config.RedisSubSys,
+			Description: "replace etcd",
+			Optional:    true,
+		},
 	}
 
 	if globalIsErasure {
@@ -250,6 +257,7 @@ func initHelp() {
 		config.NotifyESSubSys:       notify.HelpES,
 		config.SubnetSubSys:         subnet.HelpSubnet,
 		config.CallhomeSubSys:       callhome.HelpCallhome,
+		config.RedisSubSys:          redis.Help,
 	}
 
 	config.RegisterHelpSubSys(helpMap)
@@ -379,6 +387,18 @@ func validateSubSysConfig(s config.Config, subSys string, objAPI ObjectLayer) er
 				return err
 			}
 		}
+	case config.RedisSubSys:
+		redisCfg, err := redis.LookupConfig(s[config.RedisSubSys][config.Default])
+		if err != nil {
+			return err
+		}
+		if redisCfg.Enabled {
+			redisCli, err := redis.New(redisCfg)
+			if err != nil {
+				return err
+			}
+			redisCli.Close()
+		}
 	default:
 		if config.LoggerSubSystems.Contains(subSys) {
 			if err := logger.ValidateSubSysConfig(s, subSys); err != nil {
@@ -492,6 +512,26 @@ func lookupConfigs(s config.Config, objAPI ObjectLayer) {
 							globalDomainNames, err))
 					}
 				}
+			}
+		}
+	}
+
+	redisCfg, err := redis.LookupConfig(s[config.RedisSubSys][config.Default])
+	if err != nil {
+		if globalIsGateway {
+			logger.FatalIf(err, "Unable to initialize redisCfg config")
+		} else {
+			logger.LogIf(ctx, fmt.Errorf("Unable to initialize redisCfg config: %w", err))
+		}
+	}
+
+	if redisCfg.Enabled {
+		globalRedisClient, err = redis.New(redisCfg)
+		if err != nil {
+			if globalIsGateway {
+				logger.FatalIf(err, "Unable to initialize redis config")
+			} else {
+				logger.LogIf(ctx, fmt.Errorf("Unable to initialize redis config: %w", err))
 			}
 		}
 	}

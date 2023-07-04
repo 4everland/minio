@@ -92,7 +92,7 @@ const (
 	CrawlerSubSys        = madmin.CrawlerSubSys
 	SubnetSubSys         = madmin.SubnetSubSys
 	CallhomeSubSys       = madmin.CallhomeSubSys
-
+	RedisSubSys          = "redis"
 	// Add new constants here (similar to above) if you add new fields to config.
 )
 

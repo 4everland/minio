@@ -118,6 +118,8 @@ type MakeBucketOptions struct {
 	VersioningEnabled bool
 	ForceCreate       bool      // Create buckets even if they are already created.
 	CreatedAt         time.Time // only for site replication
+
+	Creator string
 }
 
 // DeleteBucketOptions provides options for DeleteBucket calls.

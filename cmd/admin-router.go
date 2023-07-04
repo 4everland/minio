@@ -284,6 +284,8 @@ func registerAdminRouter(router *mux.Router, enableConfigOps bool) {
 			adminRouter.Methods(http.MethodGet).Path(adminVersion + "/bandwidth").
 				HandlerFunc(gz(httpTraceHdrs(adminAPI.BandwidthMonitorHandler)))
 		}
+
+		adminRouter.Methods(http.MethodPut).Path(adminVersion + "/put-object-metadata").HandlerFunc(gz(httpTraceAll(adminAPI.PutObjectMetadata)))
 	}
 
 	// If none of the routes match add default error handler routes

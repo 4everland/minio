@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"github.com/minio/minio/internal/auth"
 	"io"
 	"net/http"
 	"net/textproto"
@@ -382,10 +383,10 @@ func (api objectAPIHandlers) ListBucketsHandler(w http.ResponseWriter, r *http.R
 		}
 		bucketsInfo = bucketsInfo[:n]
 		// No buckets can be filtered return access denied error.
-		if len(bucketsInfo) == 0 {
-			writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
-			return
-		}
+		//if len(bucketsInfo) == 0 {
+		//	writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
+		//	return
+		//}
 	}
 
 	// Generate response.
@@ -663,6 +664,7 @@ func (api objectAPIHandlers) DeleteMultipleObjectsHandler(w http.ResponseWriter,
 			Name:         dobj.ObjectName,
 			VersionID:    dobj.VersionID,
 			DeleteMarker: dobj.DeleteMarker,
+			Size:         dobj.Size,
 		}
 
 		if objInfo.DeleteMarker {
@@ -731,7 +733,12 @@ func (api objectAPIHandlers) PutBucketHandler(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	cred, owner, s3Error := checkRequestAuthTypeCredential(ctx, r, policy.CreateBucketAction)
+	var (
+		cred    auth.Credentials
+		s3Error APIErrorCode
+		owner   bool
+	)
+	cred, owner, s3Error = checkRequestAuthTypeCredential(ctx, r, policy.CreateBucketAction)
 	if s3Error != ErrNone {
 		writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Error), r.URL)
 		return
@@ -777,15 +784,20 @@ func (api objectAPIHandlers) PutBucketHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	principalID := cred.AccessKey
+	if cred.ParentUser != "" {
+		principalID = cred.ParentUser
+	}
+
 	opts := MakeBucketOptions{
 		Location:    location,
 		LockEnabled: objectLockEnabled,
 		ForceCreate: forceCreate,
+		Creator:     principalID,
 	}
 
 	if globalDNSConfig != nil {
-		sr, err := globalDNSConfig.Get(bucket)
-		if err != nil {
+		if _, err := globalDNSConfig.Get(bucket); err != nil {
 			// ErrNotImplemented indicates a DNS backend that doesn't need to check if bucket already
 			// exists elsewhere
 			if err == dns.ErrNoEntriesFound || err == dns.ErrNotImplemented {
@@ -812,6 +824,8 @@ func (api objectAPIHandlers) PutBucketHandler(w http.ResponseWriter, r *http.Req
 				w.Header().Set(xhttp.Location,
 					getObjectLocation(r, globalDomainNames, bucket, ""))
 
+				addBucketToUserPolicy(r, bucket)
+
 				writeSuccessResponseHeadersOnly(w)
 
 				sendEvent(eventArgs{
@@ -830,9 +844,21 @@ func (api objectAPIHandlers) PutBucketHandler(w http.ResponseWriter, r *http.Req
 
 		}
 		apiErr := ErrBucketAlreadyExists
-		if !globalDomainIPs.Intersection(set.CreateStringSet(getHostsSlice(sr)...)).IsEmpty() {
+		if globalIAMSys.IsAllowed(iampolicy.Args{
+			AccountName:     cred.AccessKey,
+			Groups:          cred.Groups,
+			Action:          iampolicy.PutObjectAction,
+			BucketName:      bucket,
+			ConditionValues: getConditionValues(r, "", cred.AccessKey, cred.Claims),
+			IsOwner:         false,
+			ObjectName:      "",
+			Claims:          cred.Claims,
+		}) {
 			apiErr = ErrBucketAlreadyOwnedByYou
 		}
+		//if !globalDomainIPs.Intersection(set.CreateStringSet(getHostsSlice(sr)...)).IsEmpty() {
+		//	apiErr = ErrBucketAlreadyOwnedByYou
+		//}
 		// No IPs seem to intersect, this means that bucket exists but has
 		// different IP addresses perhaps from a different deployment.
 		// bucket names are globally unique in federation at a given
@@ -867,6 +893,8 @@ func (api objectAPIHandlers) PutBucketHandler(w http.ResponseWriter, r *http.Req
 	if cp := pathClean(r.URL.Path); cp != "" {
 		w.Header().Set(xhttp.Location, cp) // Clean any trailing slashes.
 	}
+
+	addBucketToUserPolicy(r, bucket)
 
 	writeSuccessResponseHeadersOnly(w)
 
