@@ -93,6 +93,7 @@ const (
 	SubnetSubSys         = madmin.SubnetSubSys
 	CallhomeSubSys       = madmin.CallhomeSubSys
 	RedisSubSys          = "redis"
+	PgSubSys             = "pg"
 	// Add new constants here (similar to above) if you add new fields to config.
 )
 

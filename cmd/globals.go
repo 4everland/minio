@@ -20,6 +20,7 @@ package cmd
 import (
 	"crypto/x509"
 	"errors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/pkg/bucket/policy"
 	"github.com/redis/go-redis/v9"
 	"net/http"
@@ -384,6 +385,7 @@ var (
 
 	// Replace ETCD
 	globalRedisClient *redis.Client
+	globalPgConnPool  *pgxpool.Pool
 
 	UserBucketInfoPolicySID = policy.ID("UserBucketInfo")
 	// Add new variable global values here.

@@ -21,6 +21,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio/internal/config/pg"
 	"github.com/minio/minio/internal/config/redis"
 	"strings"
 	"sync"
@@ -258,6 +260,7 @@ func initHelp() {
 		config.SubnetSubSys:         subnet.HelpSubnet,
 		config.CallhomeSubSys:       callhome.HelpCallhome,
 		config.RedisSubSys:          redis.Help,
+		config.PgSubSys:             pg.Help,
 	}
 
 	config.RegisterHelpSubSys(helpMap)
@@ -399,6 +402,18 @@ func validateSubSysConfig(s config.Config, subSys string, objAPI ObjectLayer) er
 			}
 			redisCli.Close()
 		}
+	case config.PgSubSys:
+		pgCfg, err := pg.LookupConfig(s[config.PgSubSys][config.Default])
+		if err != nil {
+			return err
+		}
+		if pgCfg.Enabled {
+			pool, err := pg.New(pgCfg)
+			if err != nil {
+				return err
+			}
+			pool.Close()
+		}
 	default:
 		if config.LoggerSubSystems.Contains(subSys) {
 			if err := logger.ValidateSubSysConfig(s, subSys); err != nil {
@@ -516,6 +531,13 @@ func lookupConfigs(s config.Config, objAPI ObjectLayer) {
 		}
 	}
 
+	// Bucket federation is 'true' only when IAM assets are not namespaced
+	// per tenant and all tenants interested in globally available users
+	// if namespace was requested such as specifying etcdPathPrefix then
+	// we assume that users are interested in global bucket support
+	// but not federation.
+	globalBucketFederation = etcdCfg.PathPrefix == "" && etcdCfg.Enabled
+
 	redisCfg, err := redis.LookupConfig(s[config.RedisSubSys][config.Default])
 	if err != nil {
 		if globalIsGateway {
@@ -557,14 +579,32 @@ func lookupConfigs(s config.Config, objAPI ObjectLayer) {
 				}
 			}
 		}
+
+		globalBucketFederation = true
 	}
 
-	// Bucket federation is 'true' only when IAM assets are not namespaced
-	// per tenant and all tenants interested in globally available users
-	// if namespace was requested such as specifying etcdPathPrefix then
-	// we assume that users are interested in global bucket support
-	// but not federation.
-	globalBucketFederation = etcdCfg.PathPrefix == "" && etcdCfg.Enabled
+	pgCfg, err := pg.LookupConfig(s[config.PgSubSys][config.Default])
+	if err != nil {
+		if globalIsGateway {
+			logger.FatalIf(err, "Unable to initialize pg config")
+		} else {
+			logger.LogIf(ctx, fmt.Errorf("Unable to initialize redisCfg config: %w", err))
+		}
+	}
+
+	if pgCfg.Enabled {
+		globalPgConnPool, err = pgxpool.New(ctx, pgCfg.Dsn)
+		if err != nil {
+			if globalIsGateway {
+				logger.FatalIf(err, "Unable to initialize pg config")
+			} else {
+				logger.LogIf(ctx, fmt.Errorf("Unable to initialize redis config: %w", err))
+			}
+		}
+
+		globalDNSConfig = nil
+		globalBucketFederation = false
+	}
 
 	globalSite, err = config.LookupSite(s[config.SiteSubSys][config.Default], s[config.RegionSubSys][config.Default])
 	if err != nil {

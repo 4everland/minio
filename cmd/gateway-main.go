@@ -293,7 +293,8 @@ func StartGateway(ctx *cli.Context, gw Gateway) {
 	globalServerConfig = srvCfg
 	globalServerConfigMu.Unlock()
 
-	go globalIAMSys.InitByRedis(GlobalContext, newObject, globalRedisClient, globalRefreshIAMInterval)
+	//go globalIAMSys.InitByRedis(GlobalContext, newObject, globalRedisClient, globalRefreshIAMInterval)
+	go globalIAMSys.InitByPg(GlobalContext, newObject, globalPgConnPool, globalRefreshIAMInterval)
 
 	buckets, err := newObject.ListBuckets(GlobalContext, BucketOptions{})
 	if err != nil {
