@@ -13,6 +13,7 @@ const (
 
 	Address  = "address"
 	Password = "password"
+	DnsPath  = "dns_path"
 
 	EnvRedisEnable   = "MINIO_REDIS_ENABLE"
 	EnvRedisAddress  = "MINIO_REDIS_ADDRESS"
@@ -29,6 +30,10 @@ var (
 		config.KV{
 			Key:   Password,
 			Value: "",
+		},
+		config.KV{
+			Key:   DnsPath,
+			Value: "/skydns",
 		},
 	}
 )

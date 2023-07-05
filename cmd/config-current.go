@@ -534,6 +534,29 @@ func lookupConfigs(s config.Config, objAPI ObjectLayer) {
 				logger.LogIf(ctx, fmt.Errorf("Unable to initialize redis config: %w", err))
 			}
 		}
+
+		if len(globalDomainNames) != 0 && !globalDomainIPs.IsEmpty() && globalRedisClient != nil {
+			if globalDNSConfig != nil {
+				// if global DNS is already configured, indicate with a warning, incase
+				// users are confused.
+				logger.LogIf(ctx, fmt.Errorf("DNS store is already configured with %s, redis is not used for DNS store", globalDNSConfig))
+			} else {
+				globalDNSConfig, err = dns.NewRedisDNS(globalRedisClient,
+					dns.RDomainNames(globalDomainNames),
+					dns.RDomainIPs(globalDomainIPs),
+					dns.RDomainPort(globalMinioPort),
+					dns.RDNSPath(redisCfg.CoreDNSPath),
+				)
+				if err != nil {
+					if globalIsGateway {
+						logger.FatalIf(err, "Unable to initialize DNS config")
+					} else {
+						logger.LogIf(ctx, fmt.Errorf("Unable to initialize DNS config for %s: %w",
+							globalDomainNames, err))
+					}
+				}
+			}
+		}
 	}
 
 	// Bucket federation is 'true' only when IAM assets are not namespaced

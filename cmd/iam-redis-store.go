@@ -156,7 +156,7 @@ func (irs *IAMRedisStore) loadPolicyDocs(ctx context.Context, m map[string]Polic
 	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
 
-	iter := irs.client.Scan(ctx, 0, iamConfigPoliciesPrefix, 0).Iterator()
+	iter := irs.client.Scan(ctx, 0, iamConfigPoliciesPrefix+"*", 0).Iterator()
 	for iter.Next(ctx) {
 		key := iter.Val()
 		val, err := irs.client.Get(ctx, key).Bytes()
@@ -233,7 +233,7 @@ func (irs *IAMRedisStore) loadUsers(ctx context.Context, userType IAMUserType, m
 	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
 
-	iter := irs.client.Scan(ctx, 0, basePrefix, 0).Iterator()
+	iter := irs.client.Scan(ctx, 0, basePrefix+"*", 0).Iterator()
 	for iter.Next(ctx) {
 		key := iter.Val()
 		val, err := irs.client.Get(ctx, key).Bytes()
@@ -270,7 +270,7 @@ func (irs *IAMRedisStore) loadGroups(ctx context.Context, m map[string]GroupInfo
 	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
 
-	iter := irs.client.Scan(ctx, 0, iamConfigGroupsPrefix, 0).Iterator()
+	iter := irs.client.Scan(ctx, 0, iamConfigGroupsPrefix+"*", 0).Iterator()
 	for iter.Next(ctx) {
 		group := iter.Val()
 		if err := irs.loadGroup(ctx, group, m); err != nil && err != errNoSuchGroup {
@@ -330,7 +330,7 @@ func (irs *IAMRedisStore) loadMappedPolicies(ctx context.Context, userType IAMUs
 		}
 	}
 
-	iter := irs.client.Scan(ctx, 0, basePrefix, 0).Iterator()
+	iter := irs.client.Scan(ctx, 0, basePrefix+"*", 0).Iterator()
 	for iter.Next(ctx) {
 		key := iter.Val()
 		val, err := irs.client.Get(ctx, key).Bytes()
