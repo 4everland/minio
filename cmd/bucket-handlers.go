@@ -335,8 +335,13 @@ func (api objectAPIHandlers) ListBucketsHandler(w http.ResponseWriter, r *http.R
 		})
 
 	} else {
-		// Invoke the list buckets.
 		var err error
+		creator := cred.AccessKey
+		if cred.ParentUser != "" {
+			creator = cred.ParentUser
+		}
+		ctx = context.WithValue(ctx, "creator", creator)
+		// Invoke the list buckets.
 		bucketsInfo, err = listBuckets(ctx, BucketOptions{})
 		if err != nil {
 			writeErrorResponse(ctx, w, toAPIError(ctx, err), r.URL)
