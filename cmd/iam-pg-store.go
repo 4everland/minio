@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -448,38 +449,46 @@ func (ips *IAMPgStore) deleteGroupInfo(ctx context.Context, name string) error {
 func (ips *IAMPgStore) watch(ctx context.Context, keyPath string) <-chan iamWatchEvent {
 	ch := make(chan iamWatchEvent)
 	go func() {
-		conn, err := ips.client.Acquire(context.Background())
-		if err != nil {
-			return
-		}
-		defer conn.Release()
-
-		_, err = conn.Exec(context.Background(), fmt.Sprintf(`listen "%s"`, keyPath))
-		if err != nil {
-			return
-		}
-
-		var data pgNotifyPayload
 		for {
-			msg, err := conn.Conn().WaitForNotification(ctx)
+			conn, err := ips.client.Acquire(context.Background())
 			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				logger.LogIf(ctx, fmt.Errorf("Failure in loading watch event: %v", err))
-				time.Sleep(time.Second * 1)
+				logger.LogIf(ctx, fmt.Errorf("Failure in loading watch event: acquire - %v", err))
+				time.Sleep(time.Second * 5)
 				continue
 			}
 
-			_ = json.Unmarshal([]byte(msg.Payload), &data)
-			ch <- iamWatchEvent{
-				isCreated: data.IsCreated,
-				keyPath:   data.Key,
+			_, err = conn.Exec(context.Background(), fmt.Sprintf(`listen "%s"`, keyPath))
+			if err != nil {
+				logger.LogIf(ctx, fmt.Errorf("Failure in loading watch event: exec - %v", err))
+				time.Sleep(time.Second * 5)
+				continue
+			}
+
+			if err := ips.waitForNotification(ctx, conn, ch); err != nil && errors.Is(ctx.Err(), err) {
+				logger.LogIf(ctx, fmt.Errorf("Failure in loading watch event: waitForNotification - %v", err))
+				return
 			}
 		}
 	}()
 
 	return ch
+}
+
+func (ips *IAMPgStore) waitForNotification(ctx context.Context, conn *pgxpool.Conn, ch chan<- iamWatchEvent) error {
+	var data pgNotifyPayload
+	for {
+		msg, err := conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			logger.LogIf(ctx, fmt.Errorf("Failure in loading watch event: %v", err))
+			return err
+		}
+
+		_ = json.Unmarshal([]byte(msg.Payload), &data)
+		ch <- iamWatchEvent{
+			isCreated: data.IsCreated,
+			keyPath:   data.Key,
+		}
+	}
 }
 
 func (ips *IAMPgStore) tableName(key string) string {
