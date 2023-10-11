@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/minio/minio/internal/event"
 	"github.com/minio/minio/internal/logger"
@@ -127,7 +128,7 @@ type KafkaTarget struct {
 
 	id         event.TargetID
 	args       KafkaArgs
-	producer   sarama.SyncProducer
+	producer   sarama.AsyncProducer
 	config     *sarama.Config
 	store      Store
 	loggerOnce logger.LogOnce
@@ -186,15 +187,13 @@ func (target *KafkaTarget) send(eventData event.Event) error {
 		return err
 	}
 
-	msg := sarama.ProducerMessage{
+	target.producer.Input() <- &sarama.ProducerMessage{
 		Topic: target.args.Topic,
 		Key:   sarama.StringEncoder(key),
 		Value: sarama.ByteEncoder(data),
 	}
 
-	_, _, err = target.producer.SendMessage(&msg)
-
-	return err
+	return nil
 }
 
 // Send - reads an event from store and sends it to Kafka.
@@ -214,7 +213,7 @@ func (target *KafkaTarget) Send(eventKey string) error {
 		for _, broker := range target.args.Brokers {
 			brokers = append(brokers, broker.String())
 		}
-		target.producer, err = sarama.NewSyncProducer(brokers, target.config)
+		target.producer, err = sarama.NewAsyncProducer(brokers, target.config)
 		if err != nil {
 			if err != sarama.ErrOutOfBrokers {
 				return err
@@ -300,9 +299,11 @@ func (target *KafkaTarget) initKafka() error {
 	config.Net.TLS.Config.ClientAuth = args.TLS.ClientAuth
 	config.Net.TLS.Config.RootCAs = args.TLS.RootCAs
 
-	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.RequiredAcks = sarama.WaitForLocal
 	config.Producer.Retry.Max = 10
-	config.Producer.Return.Successes = true
+	config.Producer.Compression = sarama.CompressionSnappy
+	config.Producer.Flush.Frequency = 500 * time.Millisecond
+	config.Producer.Return.Errors = false
 
 	target.config = config
 
@@ -311,7 +312,7 @@ func (target *KafkaTarget) initKafka() error {
 		brokers = append(brokers, broker.String())
 	}
 
-	producer, err := sarama.NewSyncProducer(brokers, config)
+	producer, err := sarama.NewAsyncProducer(brokers, config)
 	if err != nil {
 		if err != sarama.ErrOutOfBrokers {
 			target.loggerOnce(context.Background(), err, target.ID().String())
