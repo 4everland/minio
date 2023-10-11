@@ -26,8 +26,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/Shopify/sarama"
-	saramatls "github.com/Shopify/sarama/tools/tls"
+	"github.com/IBM/sarama"
+	saramatls "github.com/IBM/sarama/tools/tls"
 
 	"github.com/minio/minio/internal/logger/message/audit"
 	"github.com/minio/minio/internal/logger/target/types"

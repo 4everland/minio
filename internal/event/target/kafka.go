@@ -34,8 +34,8 @@ import (
 	"github.com/minio/minio/internal/logger"
 	xnet "github.com/minio/pkg/net"
 
-	sarama "github.com/Shopify/sarama"
-	saramatls "github.com/Shopify/sarama/tools/tls"
+	sarama "github.com/IBM/sarama"
+	saramatls "github.com/IBM/sarama/tools/tls"
 )
 
 // Kafka input constants
