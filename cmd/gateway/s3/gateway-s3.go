@@ -17,8 +17,12 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/ipfs/boxo/coreiface/options"
+	"github.com/ipfs/boxo/files"
+	"github.com/multiformats/go-multiaddr"
 	"io"
 	"math/rand"
 	"net/http"
@@ -27,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	shell "github.com/ipfs/go-ipfs-http-client"
 	"github.com/minio/cli"
 	"github.com/minio/madmin-go"
 	miniogo "github.com/minio/minio-go/v7"
@@ -97,9 +102,23 @@ func s3GatewayMain(ctx *cli.Context) {
 	logger.FatalIf(minio.ValidateGatewayArguments(serverAddr, args.First()), "Invalid argument")
 
 	// Start the gateway..
+	nodeAddr := env.Get("PINNING_NODE_ADDR", "/ip4/127.0.0.1/tcp/5001")
+	addr, err := multiaddr.NewMultiaddr(nodeAddr)
+	if err != nil {
+		logger.Fatal(err, nodeAddr)
+	}
+
+	sh, err := shell.NewApi(addr)
+	if err != nil {
+		logger.Fatal(err, nodeAddr)
+	}
+
 	minio.StartGateway(ctx, &S3{
 		host:  args.First(),
 		debug: env.Get("_MINIO_SERVER_DEBUG", config.EnableOff) == config.EnableOn,
+
+		sh:         sh,
+		bucketName: env.Get("PINNING_TEMP_BUCKET", "pinning-service-upload"),
 	})
 }
 
@@ -107,6 +126,9 @@ func s3GatewayMain(ctx *cli.Context) {
 type S3 struct {
 	host  string
 	debug bool
+
+	sh         *shell.HttpApi
+	bucketName string
 }
 
 // Name implements Gateway interface.
@@ -273,6 +295,9 @@ func (g *S3) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, error
 		HTTPClient: &http.Client{
 			Transport: t,
 		},
+
+		sh:         g.sh,
+		bucketName: g.bucketName,
 	}
 
 	// Enables single encryption of KMS is configured.
@@ -294,6 +319,8 @@ type s3Objects struct {
 	Client     *miniogo.Core
 	HTTPClient *http.Client
 	Metrics    *minio.BackendMetrics
+	sh         *shell.HttpApi
+	bucketName string
 }
 
 // GetMetrics returns this gateway's metrics
@@ -382,20 +409,26 @@ func (l *s3Objects) GetBucketInfo(ctx context.Context, bucket string, opts minio
 
 // ListBuckets lists all S3 buckets
 func (l *s3Objects) ListBuckets(ctx context.Context, opts minio.BucketOptions) ([]minio.BucketInfo, error) {
-	buckets, err := l.Client.ListBuckets(ctx)
-	if err != nil {
-		return nil, minio.ErrorRespToObjectError(err)
-	}
-
-	b := make([]minio.BucketInfo, len(buckets))
-	for i, bi := range buckets {
-		b[i] = minio.BucketInfo{
-			Name:    bi.Name,
-			Created: bi.CreationDate,
-		}
-	}
-
-	return b, err
+	return []minio.BucketInfo{
+		{
+			Name:    l.bucketName,
+			Created: time.Now(),
+		},
+	}, nil
+	//buckets, err := l.Client.ListBuckets(ctx)
+	//if err != nil {
+	//	return nil, minio.ErrorRespToObjectError(err)
+	//}
+	//
+	//b := make([]minio.BucketInfo, len(buckets))
+	//for i, bi := range buckets {
+	//	b[i] = minio.BucketInfo{
+	//		Name:    bi.Name,
+	//		Created: bi.CreationDate,
+	//	}
+	//}
+	//
+	//return b, err
 }
 
 // DeleteBucket deletes a bucket on S3
@@ -523,7 +556,8 @@ func (l *s3Objects) PutObject(ctx context.Context, bucket string, object string,
 		// we can set md5sum to be calculated always.
 		SendContentMd5: true,
 	}
-	ui, err := l.Client.PutObject(ctx, bucket, object, data, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
+	var bf bytes.Buffer
+	ui, err := l.Client.PutObject(ctx, bucket, object, io.TeeReader(data, &bf), data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
 	if err != nil {
 		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 	}
@@ -534,6 +568,12 @@ func (l *s3Objects) PutObject(ctx context.Context, bucket string, object string,
 		Key:      object,
 		Metadata: minio.ToMinioClientObjectInfoMetadata(userDefined),
 	}
+
+	cid, err := l.ipfsCheck(ctx, bucket, object, files.NewBytesFile(bf.Bytes()))
+	if err != nil {
+		return objInfo, err
+	}
+	oi.ETag = cid
 
 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
 }
@@ -718,12 +758,22 @@ func (l *s3Objects) AbortMultipartUpload(ctx context.Context, bucket string, obj
 
 // CompleteMultipartUpload completes ongoing multipart upload and finalizes object
 func (l *s3Objects) CompleteMultipartUpload(ctx context.Context, bucket string, object string, uploadID string, uploadedParts []minio.CompletePart, opts minio.ObjectOptions) (oi minio.ObjectInfo, e error) {
-	etag, err := l.Client.CompleteMultipartUpload(ctx, bucket, object, uploadID, minio.ToMinioClientCompleteParts(uploadedParts), miniogo.PutObjectOptions{})
+	_, err := l.Client.CompleteMultipartUpload(ctx, bucket, object, uploadID, minio.ToMinioClientCompleteParts(uploadedParts), miniogo.PutObjectOptions{})
 	if err != nil {
 		return oi, minio.ErrorRespToObjectError(err, bucket, object)
 	}
 
-	return minio.ObjectInfo{Bucket: bucket, Name: object, ETag: strings.Trim(etag, "\"")}, nil
+	r, _, _, err := l.Client.GetObject(ctx, bucket, object, miniogo.GetObjectOptions{})
+	if err != nil {
+		return oi, minio.ErrorRespToObjectError(err, bucket, object)
+	}
+
+	cid, err := l.ipfsCheck(ctx, bucket, object, files.NewReaderFile(r))
+	if err != nil {
+		return oi, err
+	}
+
+	return minio.ObjectInfo{Bucket: bucket, Name: object, ETag: cid}, nil
 }
 
 // SetBucketPolicy sets policy on bucket
@@ -819,4 +869,25 @@ func (l *s3Objects) IsEncryptionSupported() bool {
 
 func (l *s3Objects) IsTaggingSupported() bool {
 	return true
+}
+
+func (l *s3Objects) ipfsCheck(ctx context.Context, bucket, object string, f files.Node) (string, error) {
+	p, err := l.sh.Unixfs().Add(ctx, f, func(settings *options.UnixfsAddSettings) error {
+		settings.Pin = false
+		settings.CidVersion = 1
+		settings.RawLeaves = true
+		settings.OnlyHash = true
+		return nil
+	})
+	if err != nil {
+		return "", minio.ErrorRespToObjectError(err, bucket, object)
+	}
+
+	if _, err = l.Client.CopyObject(ctx, bucket, object, bucket, p.String(), map[string]string{}, miniogo.CopySrcOptions{}, miniogo.PutObjectOptions{}); err != nil {
+		return "", minio.ErrorRespToObjectError(err, bucket, object)
+	}
+
+	_ = l.Client.RemoveObject(ctx, bucket, object, miniogo.RemoveObjectOptions{})
+
+	return p.RootCid().String(), nil
 }
