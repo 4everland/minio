@@ -883,7 +883,7 @@ func (l *s3Objects) ipfsCheck(ctx context.Context, bucket, object string, f file
 		return "", minio.ErrorRespToObjectError(err, bucket, object)
 	}
 
-	if _, err = l.Client.CopyObject(ctx, bucket, object, bucket, p.String(), map[string]string{}, miniogo.CopySrcOptions{}, miniogo.PutObjectOptions{}); err != nil {
+	if _, err = l.Client.CopyObject(ctx, bucket, object, bucket, strings.Trim(p.String(), "/"), map[string]string{}, miniogo.CopySrcOptions{}, miniogo.PutObjectOptions{}); err != nil {
 		return "", minio.ErrorRespToObjectError(err, bucket, object)
 	}
 
