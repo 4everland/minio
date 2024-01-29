@@ -163,3 +163,22 @@ func LivenessCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 	writeResponse(w, http.StatusOK, nil, mimeNone)
 }
+
+func IamDbCheckHandler(w http.ResponseWriter, r *http.Request) {
+	if globalPgConnPool == nil {
+		writeResponse(w, http.StatusOK, nil, mimeNone)
+		return
+	}
+
+	if globalIAMSys == nil || globalIAMSys.TotalRefreshSuccesses == 0 {
+		writeResponse(w, http.StatusPreconditionFailed, nil, mimeNone)
+		return
+	}
+
+	if err := globalPgConnPool.Ping(r.Context()); err != nil {
+		writeResponse(w, http.StatusServiceUnavailable, nil, mimeNone)
+		return
+	}
+
+	writeResponse(w, http.StatusOK, nil, mimeNone)
+}

@@ -475,6 +475,7 @@ func (ips *IAMPgStore) watch(ctx context.Context, keyPath string) <-chan iamWatc
 }
 
 func (ips *IAMPgStore) waitForNotification(ctx context.Context, conn *pgxpool.Conn, ch chan<- iamWatchEvent) error {
+	defer conn.Release()
 	var data pgNotifyPayload
 	for {
 		msg, err := conn.Conn().WaitForNotification(ctx)

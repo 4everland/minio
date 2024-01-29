@@ -214,7 +214,8 @@ func guessIsHealthCheckReq(req *http.Request) bool {
 		(req.URL.Path == healthCheckPathPrefix+healthCheckLivenessPath ||
 			req.URL.Path == healthCheckPathPrefix+healthCheckReadinessPath ||
 			req.URL.Path == healthCheckPathPrefix+healthCheckClusterPath ||
-			req.URL.Path == healthCheckPathPrefix+healthCheckClusterReadPath)
+			req.URL.Path == healthCheckPathPrefix+healthCheckClusterReadPath ||
+			req.URL.Path == healthCheckPathPrefix+healthCheckIamDbPath)
 }
 
 // guessIsMetricsReq - returns true if incoming request looks
