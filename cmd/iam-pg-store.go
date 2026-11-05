@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio/internal/config"
 	"github.com/minio/minio/internal/kms"
@@ -55,7 +54,7 @@ func newIAMPgStore(client *pgxpool.Pool, usersSysType UsersSysType) *IAMPgStore 
 		client:       client,
 		usersSysType: usersSysType,
 		prefixes:     prefixes,
-		batchSize:    100000,
+		batchSize:    defaultIAMPgBatchSize,
 	}
 }
 
@@ -157,55 +156,14 @@ func (ips *IAMPgStore) getPolicyDocKV(ctx context.Context, key string, value []b
 	return nil
 }
 
-func (ips *IAMPgStore) loadPolicyDocsByPage(ctx context.Context, m map[string]PolicyDoc, conn *pgxpool.Conn, offset int) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
-	iter, err := conn.Query(ctx, fmt.Sprintf(`SELECT key, data FROM "%s" ORDER BY key OFFSET %d LIMIT %d`, ips.tableName(iamConfigPoliciesPrefix), offset, ips.batchSize))
-	if err != nil {
-		return 0, dbErrToErr(err)
-	}
-
-	count := 0
-	for iter.Next() {
-		count++
-		var (
-			key  string
-			data pgtype.DriverBytes
-		)
-		if err = iter.Scan(&key, &data); err != nil {
-			return count, err
-		}
-		if err = ips.getPolicyDocKV(ctx, key, data, m); err != nil && !errors.Is(err, errNoSuchPolicy) {
-			return count, err
-		}
-	}
-	if err = iter.Err(); err != nil {
-		return count, dbErrToErr(err)
-	}
-	return count, nil
-}
-
 func (ips *IAMPgStore) loadPolicyDocs(ctx context.Context, m map[string]PolicyDoc) error {
-	acquireCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-	conn, err := ips.client.Acquire(acquireCtx)
-	if err != nil {
+	return loadPgIAMRows(ctx, ips.client, ips.tableName(iamConfigPoliciesPrefix), ips.batchSize, defaultContextTimeout, false, func(row pgIAMRow) error {
+		err := ips.getPolicyDocKV(ctx, row.key, row.data, m)
+		if errors.Is(err, errNoSuchPolicy) {
+			return nil
+		}
 		return err
-	}
-	defer conn.Release()
-	var offset, count int
-	for {
-		count, err = ips.loadPolicyDocsByPage(ctx, m, conn, offset)
-		if err != nil {
-			return err
-		}
-		if count < ips.batchSize {
-			break
-		}
-		offset += ips.batchSize
-	}
-	return nil
+	})
 }
 
 func (ips *IAMPgStore) getUserKV(ctx context.Context, key string, value []byte, userType IAMUserType, m map[string]UserIdentity, basePrefix string) error {
@@ -249,43 +207,6 @@ func (ips *IAMPgStore) loadUser(ctx context.Context, user string, userType IAMUs
 	return ips.addUser(ctx, user, userType, u, m)
 }
 
-func (ips *IAMPgStore) loadUsersByPage(ctx context.Context, userType IAMUserType, m map[string]UserIdentity, conn *pgxpool.Conn, basePrefix string, offset int) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
-	iter, err := conn.Query(ctx, fmt.Sprintf(`SELECT key, data, ttl FROM "%s" ORDER BY key OFFSET %d LIMIT %d`, ips.tableName(basePrefix), offset, ips.batchSize))
-	if err != nil {
-		return 0, dbErrToErr(err)
-	}
-
-	var (
-		now   = time.Now().Unix()
-		count = 0
-	)
-
-	for iter.Next() {
-		count++
-		var (
-			key  string
-			data pgtype.DriverBytes
-			ttl  int64
-		)
-		if err = iter.Scan(&key, &data, &ttl); err != nil {
-			return count, err
-		}
-		if ttl != 0 && ttl < now {
-			continue
-		}
-		if err = ips.getUserKV(ctx, key, data, userType, m, basePrefix); err != nil && !errors.Is(err, errNoSuchUser) {
-			return count, err
-		}
-	}
-	if err = iter.Err(); err != nil {
-		return count, dbErrToErr(err)
-	}
-	return count, nil
-}
-
 func (ips *IAMPgStore) loadUsers(ctx context.Context, userType IAMUserType, m map[string]UserIdentity) error {
 	var basePrefix string
 	switch userType {
@@ -297,26 +218,13 @@ func (ips *IAMPgStore) loadUsers(ctx context.Context, userType IAMUserType, m ma
 		basePrefix = iamConfigUsersPrefix
 	}
 
-	acquireCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
-	conn, err := ips.client.Acquire(acquireCtx)
-	if err != nil {
+	return loadPgIAMRows(ctx, ips.client, ips.tableName(basePrefix), ips.batchSize, defaultContextTimeout, true, func(row pgIAMRow) error {
+		err := ips.getUserKV(ctx, row.key, row.data, userType, m, basePrefix)
+		if errors.Is(err, errNoSuchUser) {
+			return nil
+		}
 		return err
-	}
-	defer conn.Release()
-	var offset, count int
-	for {
-		count, err = ips.loadUsersByPage(ctx, userType, m, conn, basePrefix, offset)
-		if err != nil {
-			return err
-		}
-		if count < ips.batchSize {
-			break
-		}
-		offset += ips.batchSize
-	}
-	return nil
+	})
 }
 
 func (ips *IAMPgStore) loadGroup(ctx context.Context, group string, m map[string]GroupInfo) error {
@@ -332,59 +240,15 @@ func (ips *IAMPgStore) loadGroup(ctx context.Context, group string, m map[string
 	return nil
 }
 
-func (ips *IAMPgStore) loadGroupsByPage(ctx context.Context, m map[string]GroupInfo, conn *pgxpool.Conn, offset int) (int, error) {
-	iter, err := conn.Query(ctx, fmt.Sprintf(`SELECT key, data FROM "%s" ORDER BY key OFFSET %d LIMIT %d`, iamConfigGroupsPrefix, offset, ips.batchSize))
-	if err != nil {
-		return 0, dbErrToErr(err)
-	}
-	var (
-		gi    GroupInfo
-		count int
-	)
-
-	for iter.Next() {
-		count++
-		var (
-			key  string
-			data pgtype.DriverBytes
-		)
-		if err = iter.Scan(&key, &data); err != nil {
-			return count, err
-		}
-
-		if err = getIAMConfig(&gi, data, getGroupInfoPath(key)); err != nil {
-			return count, err
-		}
-		m[extractPathPrefixAndSuffix(key, iamConfigGroupsPrefix, path.Base(key))] = gi
-	}
-	if err = iter.Err(); err != nil {
-		return count, dbErrToErr(err)
-	}
-	return count, nil
-}
-
 func (ips *IAMPgStore) loadGroups(ctx context.Context, m map[string]GroupInfo) error {
-	acquireCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
-	conn, err := ips.client.Acquire(acquireCtx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
-
-	var offset, count int
-	for {
-		count, err = ips.loadGroupsByPage(ctx, m, conn, offset)
-		if err != nil {
+	return loadPgIAMRows(ctx, ips.client, ips.tableName(iamConfigGroupsPrefix), ips.batchSize, defaultContextTimeout, false, func(row pgIAMRow) error {
+		var gi GroupInfo
+		if err := getIAMConfig(&gi, row.data, getGroupInfoPath(row.key)); err != nil {
 			return err
 		}
-		if count < ips.batchSize {
-			break
-		}
-		offset += ips.batchSize
-	}
-	return nil
+		m[extractPathPrefixAndSuffix(row.key, iamConfigGroupsPrefix, path.Base(row.key))] = gi
+		return nil
+	})
 }
 
 func (ips *IAMPgStore) loadMappedPolicy(ctx context.Context, name string, userType IAMUserType, isGroup bool, m map[string]MappedPolicy) error {
@@ -414,47 +278,7 @@ func getPgMappedPolicy(ctx context.Context, key string, value []byte, userType I
 	return nil
 }
 
-func (ips *IAMPgStore) loadMappedPoliciesByPage(ctx context.Context, userType IAMUserType, isGroup bool, m map[string]MappedPolicy, basePrefix string, conn *pgxpool.Conn, offset int) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
-	iter, err := conn.Query(ctx, fmt.Sprintf(`SELECT key, data, ttl FROM "%s" ORDER BY key OFFSET %d LIMIT %d`, ips.tableName(basePrefix), offset, ips.batchSize))
-	if err != nil {
-		return 0, dbErrToErr(err)
-	}
-	var (
-		now   = time.Now().Unix()
-		count = 0
-	)
-
-	for iter.Next() {
-		count++
-		var (
-			key  string
-			data pgtype.DriverBytes
-			ttl  int64
-		)
-		if err = iter.Scan(&key, &data, &ttl); err != nil {
-			return count, err
-		}
-		if ttl != 0 && ttl < now {
-			continue
-		}
-
-		if err = getPgMappedPolicy(ctx, key, data, userType, isGroup, m, basePrefix); err != nil && !errors.Is(err, errNoSuchPolicy) {
-			return count, err
-		}
-	}
-	if err = iter.Err(); err != nil {
-		return count, dbErrToErr(err)
-	}
-	return count, nil
-}
-
 func (ips *IAMPgStore) loadMappedPolicies(ctx context.Context, userType IAMUserType, isGroup bool, m map[string]MappedPolicy) error {
-	acquireCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
-	defer cancel()
-
 	var basePrefix string
 	if isGroup {
 		basePrefix = iamConfigPolicyDBGroupsPrefix
@@ -469,24 +293,13 @@ func (ips *IAMPgStore) loadMappedPolicies(ctx context.Context, userType IAMUserT
 		}
 	}
 
-	conn, err := ips.client.Acquire(acquireCtx)
-	if err != nil {
+	return loadPgIAMRows(ctx, ips.client, ips.tableName(basePrefix), ips.batchSize, defaultContextTimeout, true, func(row pgIAMRow) error {
+		err := getPgMappedPolicy(ctx, row.key, row.data, userType, isGroup, m, basePrefix)
+		if errors.Is(err, errNoSuchPolicy) {
+			return nil
+		}
 		return err
-	}
-	defer conn.Release()
-
-	var offset, count int
-	for {
-		count, err = ips.loadMappedPoliciesByPage(ctx, userType, isGroup, m, basePrefix, conn, offset)
-		if err != nil {
-			return err
-		}
-		if count < ips.batchSize {
-			break
-		}
-		offset += ips.batchSize
-	}
-	return nil
+	})
 }
 
 func (ips *IAMPgStore) savePolicyDoc(ctx context.Context, policyName string, p PolicyDoc) error {
