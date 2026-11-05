@@ -208,6 +208,10 @@ func (ips *IAMPgStore) loadUser(ctx context.Context, user string, userType IAMUs
 }
 
 func (ips *IAMPgStore) loadUsers(ctx context.Context, userType IAMUserType, m map[string]UserIdentity) error {
+	if userType == regUser {
+		return loadPgIAMRegularUsers(ctx, ips.client, ips.batchSize, defaultContextTimeout, m)
+	}
+
 	var basePrefix string
 	switch userType {
 	case svcUser:
