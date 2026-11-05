@@ -157,7 +157,7 @@ func (ips *IAMPgStore) getPolicyDocKV(ctx context.Context, key string, value []b
 }
 
 func (ips *IAMPgStore) loadPolicyDocs(ctx context.Context, m map[string]PolicyDoc) error {
-	return loadPgIAMRows(ctx, ips.client, ips.tableName(iamConfigPoliciesPrefix), ips.batchSize, defaultContextTimeout, false, func(row pgIAMRow) error {
+	return loadPgIAMRowsByCursor(ctx, ips.client, ips.tableName(iamConfigPoliciesPrefix), ips.batchSize, defaultContextTimeout, false, func(row pgIAMRow) error {
 		err := ips.getPolicyDocKV(ctx, row.key, row.data, m)
 		if errors.Is(err, errNoSuchPolicy) {
 			return nil
@@ -293,7 +293,7 @@ func (ips *IAMPgStore) loadMappedPolicies(ctx context.Context, userType IAMUserT
 		}
 	}
 
-	return loadPgIAMRows(ctx, ips.client, ips.tableName(basePrefix), ips.batchSize, defaultContextTimeout, true, func(row pgIAMRow) error {
+	return loadPgIAMRowsByCursor(ctx, ips.client, ips.tableName(basePrefix), ips.batchSize, defaultContextTimeout, true, func(row pgIAMRow) error {
 		err := getPgMappedPolicy(ctx, row.key, row.data, userType, isGroup, m, basePrefix)
 		if errors.Is(err, errNoSuchPolicy) {
 			return nil
